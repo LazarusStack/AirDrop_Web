@@ -43,12 +43,11 @@ export default function ReceivePage() {
       if (msg.type === 'offer') {
         const peer = new RTCPeerConnection({
           iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' }, // STUN (for local IP discovery)
-            {
-              urls: 'turn:openrelay.metered.ca:80',   // TURN (for relaying over internet)
-              username: 'openrelayproject',
-              credential: 'openrelayproject',
-            },
+            { urls:[
+              'stun:stun.l.google.com:19302' ,
+              "stun:global.stun.twilio.com:3478"
+            ] 
+          }, // STUN (for local IP discovery)
           ],
         });    
         
@@ -58,7 +57,7 @@ export default function ReceivePage() {
         peer.ondatachannel = (e) => {
           const channel = e.channel;
           console.log('[Receiver] DataChannel received');
-          const receivedChunks: Uint32Array[] = [];
+          const receivedChunks: Uint8Array[] = [];
           let fileMeta: FileMeta ;
 
           channel.onmessage = (event) => {
@@ -78,7 +77,7 @@ export default function ReceivePage() {
                 setMessages((m) => [...m, `✅ File saved`]);
               }
             } else {
-              receivedChunks.push(new Uint32Array(event.data));
+              receivedChunks.push(new Uint8Array(event.data));
               console.log(`[Receiver] Chunk received (${event.data.byteLength} bytes)`);
               setReceivedChunks(prev => {
                 const updated = prev + 1;

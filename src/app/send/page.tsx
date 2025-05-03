@@ -59,12 +59,11 @@ export default function SendPage() {
   const startConnection = async (roomCode: string) => {
     const peer = new RTCPeerConnection({
       iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' }, // STUN (for local IP discovery)
-        {
-          urls: 'turn:openrelay.metered.ca:80',   // TURN (for relaying over internet)
-          username: 'openrelayproject',
-          credential: 'openrelayproject',
-        },
+        { urls:[
+          'stun:stun.l.google.com:19302' ,
+          "stun:global.stun.twilio.com:3478"
+        ] 
+      }
       ],
     });   
     
@@ -149,7 +148,7 @@ export default function SendPage() {
       }
   
       try {
-        dataChannel.send(new Uint32Array(buffer));
+        dataChannel.send(new Uint8Array(buffer));
       } catch (err) {
         console.error('🚫 Send failed:', err);
         break;
