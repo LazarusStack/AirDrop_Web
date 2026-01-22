@@ -48,6 +48,11 @@ export default function ReceivePage() {
               "stun:global.stun.twilio.com:3478"
             ] 
           }, // STUN (for local IP discovery)
+          {
+            urls: 'turn:13.232.240.127:3478',
+            username: 'turnuser',
+            credential: 'turnpassword'
+          }
           ],
         });    
         
@@ -69,7 +74,7 @@ export default function ReceivePage() {
                 setExpectedChunks(Math.ceil(data.size / (64 * 1024))); // 64KB chunks
               }
               else if (data.type === 'eof') {
-                const blob = new Blob(receivedChunks, { type: fileMeta.fileType });
+                const blob = new Blob([new Uint8Array(receivedChunks.flatMap(chunk => Array.from(chunk)))], { type: fileMeta.fileType });
                 const a = document.createElement('a');
                 a.href = URL.createObjectURL(blob);
                 a.download = fileMeta.name;

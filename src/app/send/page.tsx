@@ -63,6 +63,11 @@ export default function SendPage() {
           'stun:stun.l.google.com:19302' ,
           "stun:global.stun.twilio.com:3478"
         ] 
+      },
+      {
+        urls: 'turn:13.232.240.127:3478',
+        username: 'turnuser',
+        credential: 'turnpassword'
       }
       ],
     });   
