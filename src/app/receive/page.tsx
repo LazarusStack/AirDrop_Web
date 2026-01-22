@@ -41,6 +41,7 @@ export default function ReceivePage() {
       console.log('[Receiver] Received signal:', msg);
 
       if (msg.type === 'offer') {
+        console.log('[TURN Config] Attempting to use TURN server: turn:13.232.240.127:3478');
         const peer = new RTCPeerConnection({
           iceServers: [
             { urls:[
@@ -48,8 +49,19 @@ export default function ReceivePage() {
               "stun:global.stun.twilio.com:3478"
             ] 
           }, // STUN (for local IP discovery)
+          // Try multiple TURN server formats for compatibility
           {
-            urls: ['turn:13.232.240.127:3478'],
+            urls: 'turn:13.232.240.127:3478?transport=udp',
+            username: 'turnuser',
+            credential: 'turnpassword'
+          },
+          {
+            urls: 'turn:13.232.240.127:3478?transport=tcp',
+            username: 'turnuser',
+            credential: 'turnpassword'
+          },
+          {
+            urls: 'turn:13.232.240.127:3478',
             username: 'turnuser',
             credential: 'turnpassword'
           }
@@ -59,11 +71,41 @@ export default function ReceivePage() {
         
         peerRef.current = peer;
 
+        let hasRelayCandidate = false;
+        let candidateCount = { host: 0, srflx: 0, relay: 0 };
+
+        // Diagnostic: Monitor ICE gathering state
+        peer.onicegatheringstatechange = () => {
+          console.log(`[ICE Gathering State] ${peer.iceGatheringState}`);
+          if (peer.iceGatheringState === 'complete') {
+            console.log(`[ICE Candidates Summary] Host: ${candidateCount.host}, STUN: ${candidateCount.srflx}, TURN: ${candidateCount.relay}`);
+            if (!hasRelayCandidate) {
+              console.warn('⚠️ WARNING: No TURN relay candidates found!');
+              console.warn('⚠️ Possible issues:');
+              console.warn('   - TURN server may be unreachable');
+              console.warn('   - TURN credentials may be incorrect');
+              console.warn('   - TURN server may not be running');
+              console.warn('   - Firewall may be blocking port 3478');
+              console.warn('   - TURN server URL format may be incorrect');
+            }
+          }
+        };
+
         // Diagnostic: Monitor ICE connection state
         peer.oniceconnectionstatechange = () => {
           console.log(`[ICE State] ${peer.iceConnectionState}`);
           if (peer.iceConnectionState === 'failed' || peer.iceConnectionState === 'disconnected') {
-            console.error('❌ ICE connection failed - TURN server may not be working');
+            console.error('❌ ICE connection failed');
+            if (!hasRelayCandidate) {
+              console.error('❌ TURN server was not used - connection may fail behind NAT/firewall');
+            }
+          }
+          if (peer.iceConnectionState === 'connected' || peer.iceConnectionState === 'completed') {
+            if (hasRelayCandidate) {
+              console.log('✅ Connected via TURN server');
+            } else {
+              console.log('✅ Connected (direct or via STUN)');
+            }
           }
         };
 
@@ -115,8 +157,12 @@ export default function ReceivePage() {
             const candidateType = e.candidate.type;
             console.log(`[ICE Candidate] Type: ${candidateType}, Candidate: ${candidate}`);
             
+            // Track candidate types
+            candidateCount[candidateType as keyof typeof candidateCount]++;
+            
             // Check if it's a relay candidate (TURN server)
             if (candidateType === 'relay') {
+              hasRelayCandidate = true;
               console.log('✅ TURN server is being used (relay candidate found)');
             } else if (candidateType === 'srflx') {
               console.log('ℹ️ Using STUN server (server reflexive candidate)');
@@ -131,6 +177,9 @@ export default function ReceivePage() {
             }));
           } else {
             console.log('✅ ICE gathering complete');
+            if (!hasRelayCandidate) {
+              console.warn('⚠️ No TURN relay candidates were generated');
+            }
           }
         };
 
