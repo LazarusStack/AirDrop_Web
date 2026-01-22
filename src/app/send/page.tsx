@@ -57,7 +57,7 @@ export default function SendPage() {
   
 
   const startConnection = async (roomCode: string) => {
-    console.log('[TURN Config] Attempting to use TURN server: turn:13.232.240.127:3478');
+    console.log('[TURN Config] Attempting to use TURN server: turn:13.126.43.172:3478');
     const peer = new RTCPeerConnection({
       iceServers: [
         { urls:[
@@ -67,17 +67,17 @@ export default function SendPage() {
       },
       // Try multiple TURN server formats for compatibility
       {
-        urls: 'turn:13.232.240.127:3478?transport=udp',
+        urls: 'turn:13.126.43.172:3478?transport=udp',
         username: 'turnuser',
         credential: 'turnpassword'
       },
       {
-        urls: 'turn:13.232.240.127:3478?transport=tcp',
+        urls: 'turn:13.126.43.172:3478?transport=tcp',
         username: 'turnuser',
         credential: 'turnpassword'
       },
       {
-        urls: 'turn:13.232.240.127:3478',
+        urls: 'turn:13.126.43.172:3478',
         username: 'turnuser',
         credential: 'turnpassword'
       }
