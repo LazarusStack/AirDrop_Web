@@ -49,7 +49,7 @@ export default function ReceivePage() {
             ] 
           }, // STUN (for local IP discovery)
           {
-            urls: 'turn:13.232.240.127:3478',
+            urls: ['turn:13.232.240.127:3478'],
             username: 'turnuser',
             credential: 'turnpassword'
           }
@@ -58,6 +58,19 @@ export default function ReceivePage() {
         
         
         peerRef.current = peer;
+
+        // Diagnostic: Monitor ICE connection state
+        peer.oniceconnectionstatechange = () => {
+          console.log(`[ICE State] ${peer.iceConnectionState}`);
+          if (peer.iceConnectionState === 'failed' || peer.iceConnectionState === 'disconnected') {
+            console.error('❌ ICE connection failed - TURN server may not be working');
+          }
+        };
+
+        // Diagnostic: Monitor connection state
+        peer.onconnectionstatechange = () => {
+          console.log(`[Connection State] ${peer.connectionState}`);
+        };
 
         peer.ondatachannel = (e) => {
           const channel = e.channel;
@@ -95,13 +108,29 @@ export default function ReceivePage() {
           channel.onerror = (e) => console.error('DataChannel error (receiver):', e);
         };
 
+        // Diagnostic: Check ICE candidate types
         peer.onicecandidate = (e) => {
           if (e.candidate) {
+            const candidate = e.candidate.candidate;
+            const candidateType = e.candidate.type;
+            console.log(`[ICE Candidate] Type: ${candidateType}, Candidate: ${candidate}`);
+            
+            // Check if it's a relay candidate (TURN server)
+            if (candidateType === 'relay') {
+              console.log('✅ TURN server is being used (relay candidate found)');
+            } else if (candidateType === 'srflx') {
+              console.log('ℹ️ Using STUN server (server reflexive candidate)');
+            } else if (candidateType === 'host') {
+              console.log('ℹ️ Using local candidate');
+            }
+
             ws.send(JSON.stringify({
               type: 'signal',
               room: roomRef.current,
               data: { type: 'ice-candidate', candidate: e.candidate },
             }));
+          } else {
+            console.log('✅ ICE gathering complete');
           }
         };
 

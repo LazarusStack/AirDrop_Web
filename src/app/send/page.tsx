@@ -65,7 +65,7 @@ export default function SendPage() {
         ] 
       },
       {
-        urls: 'turn:13.232.240.127:3478',
+        urls: ['turn:13.232.240.127:3478'],
         username: 'turnuser',
         credential: 'turnpassword'
       }
@@ -75,18 +75,47 @@ export default function SendPage() {
     
     peerRef.current = peer;
 
-    const channel = peer.createDataChannel('file');
-    dataChannelRef.current = channel;
+    // Diagnostic: Monitor ICE connection state
+    peer.oniceconnectionstatechange = () => {
+      console.log(`[ICE State] ${peer.iceConnectionState}`);
+      if (peer.iceConnectionState === 'failed' || peer.iceConnectionState === 'disconnected') {
+        console.error('❌ ICE connection failed - TURN server may not be working');
+      }
+    };
 
+    // Diagnostic: Monitor connection state
+    peer.onconnectionstatechange = () => {
+      console.log(`[Connection State] ${peer.connectionState}`);
+    };
+
+    // Diagnostic: Check ICE candidate types
     peer.onicecandidate = (e) => {
       if (e.candidate) {
+        const candidate = e.candidate.candidate;
+        const candidateType = e.candidate.type;
+        console.log(`[ICE Candidate] Type: ${candidateType}, Candidate: ${candidate}`);
+        
+        // Check if it's a relay candidate (TURN server)
+        if (candidateType === 'relay') {
+          console.log('✅ TURN server is being used (relay candidate found)');
+        } else if (candidateType === 'srflx') {
+          console.log('ℹ️ Using STUN server (server reflexive candidate)');
+        } else if (candidateType === 'host') {
+          console.log('ℹ️ Using local candidate');
+        }
+
         wsRef.current?.send(JSON.stringify({
           type: 'signal',
           room: roomCode,
           data: { type: 'ice-candidate', candidate: e.candidate },
         }));
+      } else {
+        console.log('✅ ICE gathering complete');
       }
     };
+
+    const channel = peer.createDataChannel('file');
+    dataChannelRef.current = channel;
 
     channel.onopen = () => {
       console.log('[DataChannel] Open (sender)');
