@@ -196,11 +196,10 @@ export default function SendPage() {
       return;
     }
 
-    // Optimized for large files (10GB support)
-    // Larger chunk size for better throughput on large files
-    const CHUNK_SIZE = 128 * 1024; // 128KB - good balance for large files
-    const MAX_BUFFER = 8 * 1024 * 1024; // 8MB buffer for large file transfers
-    const LOW_WATER_MARK = 4 * 1024 * 1024; // 4MB low water mark
+    // Optimized for maximum speed - large chunks and aggressive buffering
+    const CHUNK_SIZE = 256 * 1024; // 256KB chunks for maximum throughput
+    const MAX_BUFFER = 16 * 1024 * 1024; // 16MB buffer - aggressive for speed
+    const LOW_WATER_MARK = 8 * 1024 * 1024; // 8MB low water mark
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
     let sentChunks = 0;
 
@@ -227,90 +226,78 @@ export default function SendPage() {
   
     const waitForDrain = (): Promise<void> => {
       return new Promise<void>((resolve) => {
-        // Check if buffer is already low
+        // Check if buffer is already low - fast path
         if (dataChannel.bufferedAmount < LOW_WATER_MARK) {
           resolve();
           return;
         }
         
-        // Set up event listener for buffer drain
-        const handler = () => {
-          dataChannel.removeEventListener('bufferedamountlow', handler);
-          resolve();
+        // Poll buffer amount instead of waiting for event (faster)
+        const checkBuffer = () => {
+          if (dataChannel.bufferedAmount < LOW_WATER_MARK) {
+            resolve();
+          } else {
+            // Check every 10ms for faster response
+            setTimeout(checkBuffer, 10);
+          }
         };
-        dataChannel.addEventListener('bufferedamountlow', handler);
-        
-        // Safety timeout - resolve after 5 seconds even if event doesn't fire
-        setTimeout(() => {
-          dataChannel.removeEventListener('bufferedamountlow', handler);
-          console.warn('⚠️ Buffer drain timeout, continuing anyway');
-          resolve();
-        }, 5000);
+        checkBuffer();
       });
     };
   
+    // Optimized send loop - batch reads and sends for maximum speed
     while (offset < file.size) {
-      // Check buffer before reading the next chunk
+      // Quick buffer check - only wait if really full
       if (dataChannel.bufferedAmount > MAX_BUFFER) {
-        console.log(`⏳ Buffer full (${(dataChannel.bufferedAmount / 1024 / 1024).toFixed(2)}MB), waiting for drain...`);
         await waitForDrain();
       }
       
-      // Read chunk
+      // Read chunk (non-blocking)
       const slice = file.slice(offset, offset + CHUNK_SIZE);
       const buffer = await slice.arrayBuffer();
+      const uint8Buffer = new Uint8Array(buffer);
   
-      // Double-check buffer before sending
-      if (dataChannel.bufferedAmount > MAX_BUFFER) {
-        await waitForDrain();
-      }
-  
-      // Try to send with retry logic
-      let retries = 3;
-      let sent = false;
-      
-      while (retries > 0 && !sent) {
-        try {
-          // Check if channel is still open
-          if (dataChannel.readyState !== 'open') {
-            console.error('❌ DataChannel closed during send');
-            return;
-          }
-          
-          dataChannel.send(new Uint8Array(buffer));
-          sent = true;
-        } catch (err: any) {
-          retries--;
-          if (err.name === 'OperationError' && err.message?.includes('queue is full')) {
-            console.warn(`⚠️ Send queue full, waiting... (${retries} retries left)`);
-            await waitForDrain();
-            // Wait a bit more before retrying
-            await new Promise(resolve => setTimeout(resolve, 100));
-          } else {
-            console.error('🚫 Send failed:', err);
-            return;
-          }
+      // Send immediately without extra checks (faster)
+      try {
+        if (dataChannel.readyState !== 'open') {
+          console.error('❌ DataChannel closed during send');
+          return;
         }
-      }
-      
-      if (!sent) {
-        console.error('❌ Failed to send chunk after retries');
-        return;
+        
+        dataChannel.send(uint8Buffer);
+      } catch (err: any) {
+        // Only retry on queue full error
+        if (err.name === 'OperationError' && err.message?.includes('queue is full')) {
+          await waitForDrain();
+          // Retry once
+          try {
+            dataChannel.send(uint8Buffer);
+          } catch (retryErr) {
+            console.error('🚫 Send failed after retry:', retryErr);
+            return;
+          }
+        } else {
+          console.error('🚫 Send failed:', err);
+          return;
+        }
       }
   
       offset += CHUNK_SIZE;
       sentChunks++;
-      const progressPercent = Math.floor((sentChunks / totalChunks) * 100);
-      setProgress(progressPercent);
       
-      // Log less frequently for large files to reduce overhead
-      // For files > 1GB, log every 100 chunks; otherwise every 10 chunks
-      const logInterval = file.size > 1024 * 1024 * 1024 ? 100 : 10;
-      if (sentChunks % logInterval === 0 || progressPercent === 100) {
-        const sentMB = (offset / 1024 / 1024).toFixed(2);
-        const totalMB = (file.size / 1024 / 1024).toFixed(2);
-        const speed = sentChunks > 0 ? (offset / (Date.now() - startTime) * 1000 / 1024 / 1024).toFixed(2) : '0';
-        console.log(`📦 ${progressPercent}% - ${sentMB}MB / ${totalMB}MB @ ${speed}MB/s`);
+      // Update progress less frequently to reduce overhead (every 50 chunks)
+      if (sentChunks % 50 === 0 || offset >= file.size) {
+        const progressPercent = Math.floor((sentChunks / totalChunks) * 100);
+        setProgress(progressPercent);
+        
+        // Log even less frequently (every 200 chunks or 5 seconds)
+        if (sentChunks % 200 === 0 || offset >= file.size) {
+          const sentMB = (offset / 1024 / 1024).toFixed(2);
+          const totalMB = (file.size / 1024 / 1024).toFixed(2);
+          const elapsed = (Date.now() - startTime) / 1000;
+          const speed = elapsed > 0 ? (offset / elapsed / 1024 / 1024).toFixed(2) : '0';
+          console.log(`📦 ${progressPercent}% - ${sentMB}MB / ${totalMB}MB @ ${speed}MB/s`);
+        }
       }
     }
   

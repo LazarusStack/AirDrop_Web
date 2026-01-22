@@ -129,7 +129,7 @@ export default function ReceivePage() {
               if (data.type === 'file-meta') {
                 fileMeta = data;
                 const fileSizeGB = (data.size / 1024 / 1024 / 1024).toFixed(2);
-                const chunkSize = 128 * 1024; // Match sender chunk size
+                const chunkSize = 256 * 1024; // Match sender chunk size (256KB)
                 setExpectedChunks(Math.ceil(data.size / chunkSize));
                 setMessages((m) => [...m, `Receiving: ${fileMeta.name} (${fileSizeGB}GB)`]);
                 console.log(`📥 Starting receive: ${fileMeta.name} (${fileSizeGB}GB)`);
@@ -148,19 +148,39 @@ export default function ReceivePage() {
                 console.log(`✅ File saved: ${fileMeta.name}`);
               }
             } else {
+              // Optimized: push chunk immediately without heavy calculations
               receivedChunks.push(new Uint8Array(event.data));
+              
+              // Update state less frequently for better performance
               setReceivedChunks(prev => {
                 const updated = prev + 1;
-                setRecvProgress(Math.floor((updated / expectedChunks) * 100));
                 
-                // Log progress less frequently for large files
-                const now = Date.now();
-                if (now - lastLogTime > 2000 || updated === expectedChunks) { // Log every 2 seconds
-                  const receivedMB = (receivedChunks.reduce((sum, chunk) => sum + chunk.length, 0) / 1024 / 1024).toFixed(2);
-                  const totalMB = fileMeta ? (fileMeta.size / 1024 / 1024).toFixed(2) : '0';
-                  const speed = updated > 0 ? (receivedChunks.reduce((sum, chunk) => sum + chunk.length, 0) / (now - startTime) * 1000 / 1024 / 1024).toFixed(2) : '0';
-                  console.log(`📥 ${Math.floor((updated / expectedChunks) * 100)}% - ${receivedMB}MB / ${totalMB}MB @ ${speed}MB/s`);
-                  lastLogTime = now;
+                // Only calculate progress every 10 chunks to reduce overhead
+                if (updated % 10 === 0 || updated === 1) {
+                  const totalBytesReceived = receivedChunks.reduce((sum, chunk) => sum + chunk.length, 0);
+                  let progressPercent = 0;
+                  
+                  if (fileMeta && fileMeta.size > 0) {
+                    progressPercent = Math.min(100, Math.floor((totalBytesReceived / fileMeta.size) * 100));
+                  } else if (expectedChunks > 0) {
+                    progressPercent = Math.min(100, Math.floor((updated / expectedChunks) * 100));
+                  }
+                  
+                  setRecvProgress(progressPercent);
+                  
+                  // Log even less frequently (every 5 seconds or every 100 chunks)
+                  const now = Date.now();
+                  if ((now - lastLogTime > 5000 || updated % 100 === 0) && (fileMeta && totalBytesReceived >= fileMeta.size || updated % 100 === 0)) {
+                    const receivedMB = (totalBytesReceived / 1024 / 1024).toFixed(2);
+                    const totalMB = fileMeta ? (fileMeta.size / 1024 / 1024).toFixed(2) : '0';
+                    const elapsed = (now - startTime) / 1000;
+                    const speed = elapsed > 0 ? (totalBytesReceived / elapsed / 1024 / 1024).toFixed(2) : '0';
+                    
+                    if (fileMeta && fileMeta.size > 0) {
+                      console.log(`📥 ${progressPercent}% - ${receivedMB}MB / ${totalMB}MB @ ${speed}MB/s`);
+                    }
+                    lastLogTime = now;
+                  }
                 }
                 
                 return updated;
