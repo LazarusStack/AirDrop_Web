@@ -31,7 +31,7 @@ export default function ReceivePage() {
   };
 
   useEffect(() => {
-    const ws = new WebSocket('wss://airdropbackend-production.up.railway.app');
+    const ws = new WebSocket('wss://airdropbackend-jv96.onrender.com');
     wsRef.current = ws;
 
     ws.onopen = () => console.log('✅ WebSocket connected (receiver)');

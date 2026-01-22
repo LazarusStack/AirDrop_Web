@@ -12,7 +12,7 @@ export default function SendPage() {
 
 
   useEffect(() => {
-    const ws = new WebSocket('wss://airdropbackend-production.up.railway.app');
+    const ws = new WebSocket('wss://airdropbackend-jv96.onrender.com');
     wsRef.current = ws;
 
     ws.onopen = () => {
