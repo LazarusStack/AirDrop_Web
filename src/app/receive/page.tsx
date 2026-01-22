@@ -120,28 +120,49 @@ export default function ReceivePage() {
           const receivedChunks: Uint8Array[] = [];
           let fileMeta: FileMeta ;
 
+          const startTime = Date.now();
+          let lastLogTime = Date.now();
+          
           channel.onmessage = (event) => {
             if (typeof event.data === 'string') {
               const data = JSON.parse(event.data) as DataMessage;
               if (data.type === 'file-meta') {
                 fileMeta = data;
-                setMessages((m) => [...m, `Receiving: ${fileMeta.name}`]);
-                setExpectedChunks(Math.ceil(data.size / (64 * 1024))); // 64KB chunks
+                const fileSizeGB = (data.size / 1024 / 1024 / 1024).toFixed(2);
+                const chunkSize = 128 * 1024; // Match sender chunk size
+                setExpectedChunks(Math.ceil(data.size / chunkSize));
+                setMessages((m) => [...m, `Receiving: ${fileMeta.name} (${fileSizeGB}GB)`]);
+                console.log(`📥 Starting receive: ${fileMeta.name} (${fileSizeGB}GB)`);
               }
               else if (data.type === 'eof') {
-                const blob = new Blob([new Uint8Array(receivedChunks.flatMap(chunk => Array.from(chunk)))], { type: fileMeta.fileType });
+                console.log('📥 All chunks received, creating blob...');
+                // Uint8Array is compatible with BlobPart, use type assertion to satisfy TypeScript
+                const blob = new Blob(receivedChunks as BlobPart[], { type: fileMeta.fileType });
                 const a = document.createElement('a');
                 a.href = URL.createObjectURL(blob);
                 a.download = fileMeta.name;
                 a.click();
-                setMessages((m) => [...m, `✅ File saved`]);
+                URL.revokeObjectURL(a.href);
+                const transferTime = ((Date.now() - startTime) / 1000).toFixed(1);
+                setMessages((m) => [...m, `✅ File saved (${transferTime}s)`]);
+                console.log(`✅ File saved: ${fileMeta.name}`);
               }
             } else {
               receivedChunks.push(new Uint8Array(event.data));
-              console.log(`[Receiver] Chunk received (${event.data.byteLength} bytes)`);
               setReceivedChunks(prev => {
                 const updated = prev + 1;
                 setRecvProgress(Math.floor((updated / expectedChunks) * 100));
+                
+                // Log progress less frequently for large files
+                const now = Date.now();
+                if (now - lastLogTime > 2000 || updated === expectedChunks) { // Log every 2 seconds
+                  const receivedMB = (receivedChunks.reduce((sum, chunk) => sum + chunk.length, 0) / 1024 / 1024).toFixed(2);
+                  const totalMB = fileMeta ? (fileMeta.size / 1024 / 1024).toFixed(2) : '0';
+                  const speed = updated > 0 ? (receivedChunks.reduce((sum, chunk) => sum + chunk.length, 0) / (now - startTime) * 1000 / 1024 / 1024).toFixed(2) : '0';
+                  console.log(`📥 ${Math.floor((updated / expectedChunks) * 100)}% - ${receivedMB}MB / ${totalMB}MB @ ${speed}MB/s`);
+                  lastLogTime = now;
+                }
+                
                 return updated;
               });
             }

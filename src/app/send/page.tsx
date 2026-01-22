@@ -188,65 +188,144 @@ export default function SendPage() {
     const dataChannel = dataChannelRef.current;
   
     if (!file || !dataChannel || dataChannel.readyState !== 'open') return;
-  
-    const CHUNK_SIZE = 64 * 1024; // 64KB
-    const MAX_BUFFER = 16 * 1024 * 1024; // 16MB
-    const LOW_WATER_MARK = 8 * 1024 * 1024; // 8MB
+
+    // Check file size (10GB limit)
+    const MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024; // 10GB
+    if (file.size > MAX_FILE_SIZE) {
+      alert(`File size (${(file.size / 1024 / 1024 / 1024).toFixed(2)}GB) exceeds the 10GB limit`);
+      return;
+    }
+
+    // Optimized for large files (10GB support)
+    // Larger chunk size for better throughput on large files
+    const CHUNK_SIZE = 128 * 1024; // 128KB - good balance for large files
+    const MAX_BUFFER = 8 * 1024 * 1024; // 8MB buffer for large file transfers
+    const LOW_WATER_MARK = 4 * 1024 * 1024; // 4MB low water mark
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
     let sentChunks = 0;
 
-  
+    console.log(`📤 Starting transfer: ${file.name} (${(file.size / 1024 / 1024 / 1024).toFixed(2)}GB)`);
+
+    // Set the low water mark threshold
     dataChannel.bufferedAmountLowThreshold = LOW_WATER_MARK;
   
     // Send file metadata
-    dataChannel.send(JSON.stringify({
-      type: 'file-meta',
-      name: file.name,
-      size: file.size,
-      fileType: file.type,
-    }));
+    try {
+      dataChannel.send(JSON.stringify({
+        type: 'file-meta',
+        name: file.name,
+        size: file.size,
+        fileType: file.type,
+      }));
+    } catch (err) {
+      console.error('🚫 Failed to send file metadata:', err);
+      return;
+    }
   
     let offset = 0;
+    const startTime = Date.now();
   
-    const waitForDrain = () =>
-      new Promise<void>((resolve) => {
+    const waitForDrain = (): Promise<void> => {
+      return new Promise<void>((resolve) => {
+        // Check if buffer is already low
         if (dataChannel.bufferedAmount < LOW_WATER_MARK) {
           resolve();
-        } else {
-          const handler = () => {
-            dataChannel.removeEventListener('bufferedamountlow', handler);
-            resolve();
-          };
-          dataChannel.addEventListener('bufferedamountlow', handler);
+          return;
         }
+        
+        // Set up event listener for buffer drain
+        const handler = () => {
+          dataChannel.removeEventListener('bufferedamountlow', handler);
+          resolve();
+        };
+        dataChannel.addEventListener('bufferedamountlow', handler);
+        
+        // Safety timeout - resolve after 5 seconds even if event doesn't fire
+        setTimeout(() => {
+          dataChannel.removeEventListener('bufferedamountlow', handler);
+          console.warn('⚠️ Buffer drain timeout, continuing anyway');
+          resolve();
+        }, 5000);
       });
+    };
   
     while (offset < file.size) {
+      // Check buffer before reading the next chunk
+      if (dataChannel.bufferedAmount > MAX_BUFFER) {
+        console.log(`⏳ Buffer full (${(dataChannel.bufferedAmount / 1024 / 1024).toFixed(2)}MB), waiting for drain...`);
+        await waitForDrain();
+      }
+      
+      // Read chunk
       const slice = file.slice(offset, offset + CHUNK_SIZE);
       const buffer = await slice.arrayBuffer();
   
-      // Wait for buffer drain if needed
+      // Double-check buffer before sending
       if (dataChannel.bufferedAmount > MAX_BUFFER) {
         await waitForDrain();
       }
   
-      try {
-        dataChannel.send(new Uint8Array(buffer));
-      } catch (err) {
-        console.error('🚫 Send failed:', err);
-        break;
+      // Try to send with retry logic
+      let retries = 3;
+      let sent = false;
+      
+      while (retries > 0 && !sent) {
+        try {
+          // Check if channel is still open
+          if (dataChannel.readyState !== 'open') {
+            console.error('❌ DataChannel closed during send');
+            return;
+          }
+          
+          dataChannel.send(new Uint8Array(buffer));
+          sent = true;
+        } catch (err: any) {
+          retries--;
+          if (err.name === 'OperationError' && err.message?.includes('queue is full')) {
+            console.warn(`⚠️ Send queue full, waiting... (${retries} retries left)`);
+            await waitForDrain();
+            // Wait a bit more before retrying
+            await new Promise(resolve => setTimeout(resolve, 100));
+          } else {
+            console.error('🚫 Send failed:', err);
+            return;
+          }
+        }
+      }
+      
+      if (!sent) {
+        console.error('❌ Failed to send chunk after retries');
+        return;
       }
   
       offset += CHUNK_SIZE;
       sentChunks++;
       const progressPercent = Math.floor((sentChunks / totalChunks) * 100);
       setProgress(progressPercent);
-      console.log(`📦 Sent ${progressPercent}%`);
-      console.log(`📦 Sent ${((offset / file.size) * 100).toFixed(2)}%`);
+      
+      // Log less frequently for large files to reduce overhead
+      // For files > 1GB, log every 100 chunks; otherwise every 10 chunks
+      const logInterval = file.size > 1024 * 1024 * 1024 ? 100 : 10;
+      if (sentChunks % logInterval === 0 || progressPercent === 100) {
+        const sentMB = (offset / 1024 / 1024).toFixed(2);
+        const totalMB = (file.size / 1024 / 1024).toFixed(2);
+        const speed = sentChunks > 0 ? (offset / (Date.now() - startTime) * 1000 / 1024 / 1024).toFixed(2) : '0';
+        console.log(`📦 ${progressPercent}% - ${sentMB}MB / ${totalMB}MB @ ${speed}MB/s`);
+      }
     }
   
-    dataChannel.send(JSON.stringify({ type: 'eof' }));
-    console.log('✅ File send complete');
+    // Wait for buffer to drain before sending EOF
+    if (dataChannel.bufferedAmount > 0) {
+      console.log('⏳ Waiting for final buffer drain before EOF...');
+      await waitForDrain();
+    }
+  
+    try {
+      dataChannel.send(JSON.stringify({ type: 'eof' }));
+      console.log('✅ File send complete');
+    } catch (err) {
+      console.error('🚫 Failed to send EOF:', err);
+    }
   };
   
   
@@ -258,13 +337,22 @@ export default function SendPage() {
         <button onClick={createRoom} className="px-4 py-2 bg-blue-500 text-white rounded-xl">Create Room</button>
       )}
       {connected ? (<>
-        <input type="file" onChange={handleFile} className="block mx-auto mt-6" />
+        <input 
+          type="file" 
+          onChange={handleFile} 
+          className="block mx-auto mt-6" 
+          accept="*/*"
+        />
+        <p className="text-xs text-gray-500 mt-2">Supports files up to 10GB</p>
         {progress > 0 && progress < 100 && (
-          <div className="w-full bg-gray-200 rounded-full h-4 mt-4">
-            <div
-              className="bg-blue-500 h-4 rounded-full transition-all"
-              style={{ width: `${progress}%` }}
-            />
+          <div className="mt-4">
+            <div className="w-full bg-gray-200 rounded-full h-4">
+              <div
+                className="bg-blue-500 h-4 rounded-full transition-all"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+            <p className="text-sm text-gray-600 mt-2">{progress}%</p>
           </div>
         )}
         {progress === 100 && <p className="mt-2 text-green-600">✅ File Sent</p>}
